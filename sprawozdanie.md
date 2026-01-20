@@ -191,3 +191,34 @@ return (
 ## 8. Podsumowanie
 
 Rozwiązanie łączy warstwę uczenia maszynowego, backend oraz aplikację mobilną w spójny przepływ danych. Dzięki czytelnej dokumentacji i skryptom uruchomieniowym uruchomienie projektu jest szybkie, a architektura pozostaje otwarta na kolejne rozszerzenia. Model utrzymuje wysokie metryki (AUC, recall), backend udostępnia stabilne API, natomiast aplikacja Expo zapewnia przyjazny interfejs użytkownika i obejmuje pełną ścieżkę od wykonania zdjęcia po interpretację wyniku.
+
+---
+
+## 9. Zrzuty ekranu aplikacji
+
+Poniższe ekrany pochodzą bezpośrednio z aplikacji Expo/React Native i ilustrują pełny przepływ użytkownika.
+
+### Ekran startowy
+Główny widok z opisem działania aplikacji i przyciskami prowadzącymi do instrukcji oraz przesłania zdjęcia.
+![Ekran startowy z opisem produktu i CTA](start-view.PNG)  
+
+### Instrukcje
+Zestaw kroków opisujących przygotowanie pacjenta, oświetlenie i sposób kadrowania, co minimalizuje błędy predykcji.
+![Ekran instrukcji krok po kroku](instructions.PNG)  
+
+### Wybór zdjęcia
+Użytkownik decyduje, czy korzysta z aparatu, czy galerii; komponent dba o uprawnienia i stan przycisków.
+![Widok Upload z przyciskami kamery/galerii](upload-photo.PNG)  
+
+### Podgląd zdjęcia
+Po wyborze pliku pojawia się podgląd oraz aktywny przycisk „Analyze”. 
+![Podgląd załadowanego zdjęcia i aktywny przycisk Analyze](uploaded.PNG)  
+![Komunikat sugerujący możliwy czerniak](uploaded-possible-melanoma.PNG)
+
+### Wynik: brak czerniaka
+Zielona karta pokazuje procentowe prawdopodobieństwo i podkreśla konieczność obserwacji zmian.
+![Wynik „No melanoma detected” z opisem zaleceń](no-melanoma-result.PNG)
+
+### Wynik: możliwy czerniak
+Czerwony ekran komunikuje wysokie ryzyko, zachęcając do pilnego kontaktu z dermatologiem.
+![Wynik „Possible melanoma” z ostrzeżeniem o konsultacji lekarskiej](melanoma-result.PNG)  
