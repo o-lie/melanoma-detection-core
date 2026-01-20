@@ -1,0 +1,6 @@
+[submodule "melanoma-detection-ai"]
+	path = melanoma-detection-ai
+	url = git@github.com:wojtekp2002/melanoma-detection-ai.git
+[submodule "melanoma-detection-app"]
+	path = melanoma-detection-app
+	url = git@github-oputyra:oputyra/melanoma-detection-app.git
