@@ -1,5 +1,7 @@
 # Sprawozdanie – Melanoma Detection Core
 
+Autorzy: Oliwia Putyra, Wojciech Pasieka
+
 ## 1. Opis projektu
 
 Przygotowano kompletny system wspierający ocenę zmian skórnych pod kątem czerniaka. Na rozwiązanie składają się:
