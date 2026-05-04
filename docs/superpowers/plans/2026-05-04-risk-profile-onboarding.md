@@ -8,26 +8,280 @@
 
 **Tech Stack:** Expo Router, React Native, SQLite (expo-sqlite), AsyncStorage (@react-native-async-storage/async-storage), TypeScript, FastAPI, pytest
 
+**Parallelism:** Backend (B1–B2) and Frontend (F1–F5) sections are independent — can be worked on simultaneously. Integration (F6–F8, I1) requires both to be done first.
+
 ---
 
 ## File Map
 
 | File | Action | Purpose |
 |------|--------|---------|
+| `melanoma-detection-ai/api/main.py` | Modify | RiskProfile model, scoring logic, /predict |
+| `melanoma-detection-ai/api/test_risk_scoring.py` | Create | pytest for scoring function |
 | `melanoma-detection-app/types/user-profile.ts` | Create | UserProfile type |
 | `melanoma-detection-app/db/user-profile.repository.ts` | Create | SQLite CRUD for user_profile |
-| `melanoma-detection-app/app/_layout.tsx` | Modify | AsyncStorage check, onboarding route |
+| `melanoma-detection-app/app/_layout.tsx` | Modify | Register onboarding + edit-profile routes |
+| `melanoma-detection-app/app/disclaimer.tsx` | Modify | AsyncStorage check before navigate |
 | `melanoma-detection-app/components/ProfileWizard.tsx` | Create | 4-step form, mode prop |
 | `melanoma-detection-app/app/onboarding.tsx` | Create | Fullscreen onboarding wrapper |
 | `melanoma-detection-app/lib/api/predict.ts` | Modify | Send risk_profile in FormData |
+| `melanoma-detection-app/app/(tabs)/upload.tsx` | Modify | Pass new result fields to result screen |
 | `melanoma-detection-app/app/(tabs)/profile.tsx` | Modify | Show risk profile section + Edit button |
+| `melanoma-detection-app/app/edit-profile.tsx` | Create | Edit mode wrapper for ProfileWizard |
 | `melanoma-detection-app/app/result.tsx` | Modify | Show clinical_risk_level + threshold info |
-| `melanoma-detection-ai/api/main.py` | Modify | RiskProfile model, scoring logic, /predict |
-| `melanoma-detection-ai/api/test_risk_scoring.py` | Create | pytest for scoring function |
 
 ---
 
-## Task 1: UserProfile type
+# BACKEND — melanoma-detection-ai
+
+---
+
+## Task B1: Python API — risk scoring (TDD)
+
+**Files:**
+- Modify: `melanoma-detection-ai/api/main.py`
+- Create: `melanoma-detection-ai/api/test_risk_scoring.py`
+
+- [ ] **Step 1: Write failing tests first**
+
+```python
+# melanoma-detection-ai/api/test_risk_scoring.py
+import pytest
+from main import RiskProfile, compute_clinical_risk
+
+
+def test_no_risk_factors_returns_low():
+    profile = RiskProfile()
+    level, threshold = compute_clinical_risk(profile)
+    assert level == "low"
+    assert threshold == 0.50
+
+
+def test_family_history_skin_cancer_alone_is_medium():
+    profile = RiskProfile(family_history_skin_cancer=True)
+    level, threshold = compute_clinical_risk(profile)
+    assert level == "medium"
+    assert threshold == 0.42
+
+
+def test_family_history_and_atypical_moles_is_high():
+    profile = RiskProfile(family_history_skin_cancer=True, atypical_moles=True)
+    level, threshold = compute_clinical_risk(profile)
+    assert level == "high"
+    assert threshold == 0.35
+
+
+def test_phototype_I_adds_score():
+    profile = RiskProfile(skin_phototype="I")
+    level, _ = compute_clinical_risk(profile)
+    assert level == "medium"
+
+
+def test_phototype_III_no_extra_score():
+    profile = RiskProfile(skin_phototype="III")
+    level, threshold = compute_clinical_risk(profile)
+    assert level == "low"
+    assert threshold == 0.50
+
+
+def test_age_over_50_adds_score():
+    profile = RiskProfile(age=55, family_history_other_cancer=True)
+    level, _ = compute_clinical_risk(profile)
+    assert level == "medium"
+
+
+def test_all_factors_high():
+    profile = RiskProfile(
+        family_history_skin_cancer=True,
+        atypical_moles=True,
+        many_moles=True,
+        skin_phototype="I",
+        age=60,
+    )
+    level, threshold = compute_clinical_risk(profile)
+    assert level == "high"
+    assert threshold == 0.35
+```
+
+- [ ] **Step 2: Run tests — expect ImportError (function not defined yet)**
+
+```bash
+cd melanoma-detection-ai && .venv/bin/pytest api/test_risk_scoring.py -v
+```
+
+Expected: `ImportError: cannot import name 'RiskProfile'` — confirms tests are wired correctly.
+
+- [ ] **Step 3: Add RiskProfile + compute_clinical_risk to main.py**
+
+Add below the FastAPI imports, before model loading:
+
+```python
+from pydantic import BaseModel
+
+class RiskProfile(BaseModel):
+    age: int | None = None
+    skin_phototype: str | None = None
+    family_history_skin_cancer: bool = False
+    family_history_other_cancer: bool = False
+    had_severe_sunburns: bool = False
+    frequent_sun_exposure: bool = False
+    uses_tanning_beds: bool = False
+    many_moles: bool = False
+    atypical_moles: bool = False
+    very_fair_skin: bool = False
+
+
+RISK_WEIGHTS = {
+    "family_history_skin_cancer": 3,
+    "atypical_moles": 3,
+    "family_history_other_cancer": 2,
+    "many_moles": 2,
+    "had_severe_sunburns": 1,
+    "uses_tanning_beds": 1,
+    "frequent_sun_exposure": 1,
+    "very_fair_skin": 1,
+}
+
+PHOTOTYPE_LOW_RISK = {"I", "II"}
+
+
+def compute_clinical_risk(profile: RiskProfile) -> tuple[str, float]:
+    """Returns (clinical_risk_level, threshold)."""
+    score = 0
+
+    for field, weight in RISK_WEIGHTS.items():
+        if getattr(profile, field, False):
+            score += weight
+
+    if profile.skin_phototype in PHOTOTYPE_LOW_RISK:
+        score += 2
+
+    if profile.age is not None and profile.age > 50:
+        score += 1
+
+    if score <= 2:
+        return "low", 0.50
+    elif score <= 5:
+        return "medium", 0.42
+    else:
+        return "high", 0.35
+```
+
+- [ ] **Step 4: Run tests — expect all 7 PASS**
+
+```bash
+cd melanoma-detection-ai && .venv/bin/pytest api/test_risk_scoring.py -v
+```
+
+Expected:
+```
+test_no_risk_factors_returns_low PASSED
+test_family_history_skin_cancer_alone_is_medium PASSED
+test_family_history_and_atypical_moles_is_high PASSED
+test_phototype_I_adds_score PASSED
+test_phototype_III_no_extra_score PASSED
+test_age_over_50_adds_score PASSED
+test_all_factors_high PASSED
+7 passed
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add melanoma-detection-ai/api/main.py melanoma-detection-ai/api/test_risk_scoring.py
+git commit -m "feat: add RiskProfile model and compute_clinical_risk with tests"
+```
+
+---
+
+## Task B2: Python API — extend /predict endpoint
+
+**Files:**
+- Modify: `melanoma-detection-ai/api/main.py`
+
+- [ ] **Step 1: Add Form to fastapi import**
+
+Change:
+```python
+from fastapi import FastAPI, File, UploadFile, HTTPException
+```
+To:
+```python
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+```
+
+- [ ] **Step 2: Replace /predict function**
+
+```python
+import json
+
+@app.post("/predict")
+async def predict(
+    file: UploadFile = File(...),
+    risk_profile: str | None = Form(default=None),
+):
+    if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
+        raise HTTPException(status_code=400, detail="Wgraj obraz JPG/PNG/WEBP.")
+
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Plik za duży (max 10 MB).")
+
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Niepoprawny plik obrazu.")
+
+    x = tf(img).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        logit = model(x).squeeze(1)
+        prob = torch.sigmoid(logit).item()
+
+    clinical_risk_level: str | None = None
+    threshold = THRESHOLD
+
+    if risk_profile:
+        try:
+            profile_data = json.loads(risk_profile)
+            profile = RiskProfile(**profile_data)
+            clinical_risk_level, threshold = compute_clinical_risk(profile)
+        except Exception:
+            pass  # malformed profile → fall back to default threshold
+
+    label: Literal["low_risk", "high_risk"] = "high_risk" if prob >= threshold else "low_risk"
+
+    return {
+        "probability": prob,
+        "threshold": threshold,
+        "clinical_risk_level": clinical_risk_level,
+        "label": label,
+        "disclaimer": "This is not a medical diagnosis. Consult a dermatologist.",
+    }
+```
+
+- [ ] **Step 3: Confirm tests still pass**
+
+```bash
+cd melanoma-detection-ai && .venv/bin/pytest api/test_risk_scoring.py -v
+```
+
+Expected: 7 passed.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add melanoma-detection-ai/api/main.py
+git commit -m "feat: extend /predict to accept and apply risk_profile"
+```
+
+---
+
+# FRONTEND — melanoma-detection-app
+
+---
+
+## Task F1: UserProfile type
 
 **Files:**
 - Create: `melanoma-detection-app/types/user-profile.ts`
@@ -66,7 +320,7 @@ git commit -m "feat: add UserProfile type"
 
 ---
 
-## Task 2: UserProfile repository
+## Task F2: UserProfile repository
 
 **Files:**
 - Create: `melanoma-detection-app/db/user-profile.repository.ts`
@@ -162,15 +416,15 @@ git commit -m "feat: add user-profile repository"
 
 ---
 
-## Task 3: Onboarding routing — disclaimer + _layout.tsx
+## Task F3: Onboarding routing
 
 **Files:**
 - Modify: `melanoma-detection-app/app/_layout.tsx`
 - Modify: `melanoma-detection-app/app/disclaimer.tsx`
 
-Flow: disclaimer is ALWAYS shown first. After the user accepts and taps "Enter app", disclaimer checks AsyncStorage. If onboarding not done → go to `/onboarding`. If done → go to `/(tabs)`.
+Flow: disclaimer is ALWAYS shown first. After accept, disclaimer checks AsyncStorage. No onboarding done → `/onboarding`. Done → `/(tabs)`.
 
-- [ ] **Step 1: Install AsyncStorage if not present**
+- [ ] **Step 1: Install AsyncStorage**
 
 ```bash
 cd melanoma-detection-app && npx expo install @react-native-async-storage/async-storage
@@ -178,9 +432,7 @@ cd melanoma-detection-app && npx expo install @react-native-async-storage/async-
 
 Expected: package installed, no error.
 
-- [ ] **Step 2: Update _layout.tsx — register onboarding route**
-
-Replace the existing file with:
+- [ ] **Step 2: Update _layout.tsx — register new routes**
 
 ```typescript
 // melanoma-detection-app/app/_layout.tsx
@@ -207,6 +459,7 @@ export default function RootLayout() {
       >
         <Stack.Screen name="disclaimer" />
         <Stack.Screen name="onboarding" />
+        <Stack.Screen name="edit-profile" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="lesions" />
         <Stack.Screen name="add-lesion" />
@@ -218,16 +471,15 @@ export default function RootLayout() {
 }
 ```
 
-- [ ] **Step 3: Update disclaimer.tsx — check onboarding after accept**
+- [ ] **Step 3: Update disclaimer.tsx — check AsyncStorage on "Enter app"**
 
-Replace the `onPress` handler of the "Enter app" Button in `disclaimer.tsx`:
+Add import at the top of `melanoma-detection-app/app/disclaimer.tsx`:
 
 ```typescript
-// Add import at the top of disclaimer.tsx
 import AsyncStorage from "@react-native-async-storage/async-storage";
 ```
 
-Replace the Button's `onPress` prop:
+Replace the Button's `onPress` prop (currently `() => router.replace("/(tabs)")`):
 
 ```typescript
 onPress={async () => {
@@ -244,17 +496,17 @@ onPress={async () => {
 
 ```bash
 git add melanoma-detection-app/app/_layout.tsx melanoma-detection-app/app/disclaimer.tsx
-git commit -m "feat: add onboarding routing — disclaimer checks AsyncStorage before navigating"
+git commit -m "feat: onboarding routing — disclaimer checks AsyncStorage before navigating"
 ```
 
 ---
 
-## Task 4: ProfileWizard component
+## Task F4: ProfileWizard component
 
 **Files:**
 - Create: `melanoma-detection-app/components/ProfileWizard.tsx`
 
-This is the shared 4-step form. Accepts `mode: "onboarding" | "edit"` and `onComplete: () => void`. All state is local. DB write happens only on final step submission.
+Shared 4-step form. Props: `mode: "onboarding" | "edit"`, `initialProfile?: UserProfile | null`, `onComplete: () => void`. All state local. DB write on final step only.
 
 - [ ] **Step 1: Create ProfileWizard.tsx**
 
@@ -283,12 +535,12 @@ type Props = {
 };
 
 const PHOTOTYPES: { value: SkinPhototype; label: string; description: string; color: string }[] = [
-  { value: "I",   label: "Type I",   description: "Always burns, never tans. Pale/freckled.",      color: "#FDDCB5" },
-  { value: "II",  label: "Type II",  description: "Usually burns, sometimes tans. Fair.",           color: "#F5C18C" },
-  { value: "III", label: "Type III", description: "Sometimes burns, always tans. Light brown.",     color: "#D4956A" },
-  { value: "IV",  label: "Type IV",  description: "Rarely burns, always tans. Olive/brown.",        color: "#A0693A" },
-  { value: "V",   label: "Type V",   description: "Very rarely burns. Dark brown.",                 color: "#6B3F1F" },
-  { value: "VI",  label: "Type VI",  description: "Never burns. Deeply pigmented.",                  color: "#3B1F0A" },
+  { value: "I",   label: "Type I",   description: "Always burns, never tans. Pale/freckled.",     color: "#FDDCB5" },
+  { value: "II",  label: "Type II",  description: "Usually burns, sometimes tans. Fair.",          color: "#F5C18C" },
+  { value: "III", label: "Type III", description: "Sometimes burns, always tans. Light brown.",    color: "#D4956A" },
+  { value: "IV",  label: "Type IV",  description: "Rarely burns, always tans. Olive/brown.",       color: "#A0693A" },
+  { value: "V",   label: "Type V",   description: "Very rarely burns. Dark brown.",                color: "#6B3F1F" },
+  { value: "VI",  label: "Type VI",  description: "Never burns. Deeply pigmented.",                color: "#3B1F0A" },
 ];
 
 const TOTAL_STEPS = 4;
@@ -299,10 +551,7 @@ function ProgressBar({ step }: { step: number }) {
       {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
         <View
           key={i}
-          style={[
-            styles.progressSegment,
-            i < step && styles.progressSegmentDone,
-          ]}
+          style={[styles.progressSegment, i < step && styles.progressSegmentDone]}
         />
       ))}
     </View>
@@ -323,9 +572,7 @@ function Toggle({
       style={[styles.toggle, value && styles.toggleActive]}
       onPress={() => onChange(!value)}
     >
-      <Text style={[styles.toggleLabel, value && styles.toggleLabelActive]}>
-        {label}
-      </Text>
+      <Text style={[styles.toggleLabel, value && styles.toggleLabelActive]}>{label}</Text>
       <View style={[styles.toggleBox, value && styles.toggleBoxActive]}>
         {value && <Ionicons name="checkmark" size={13} color="#04090f" />}
       </View>
@@ -338,34 +585,16 @@ export default function ProfileWizard({ mode, initialProfile, onComplete }: Prop
   const [saving, setSaving] = useState(false);
 
   const [age, setAge] = useState(initialProfile?.age?.toString() ?? "");
-  const [phototype, setPhototype] = useState<SkinPhototype | null>(
-    initialProfile?.skinPhototype ?? null
-  );
-  const [familySkin, setFamilySkin] = useState(
-    initialProfile?.familyHistorySkinCancer ?? false
-  );
-  const [familySkinWho, setFamilySkinWho] = useState(
-    initialProfile?.familyHistoryRelation ?? ""
-  );
-  const [familyOther, setFamilyOther] = useState(
-    initialProfile?.familyHistoryOtherCancer ?? false
-  );
-  const [familyOtherWho, setFamilyOtherWho] = useState(
-    initialProfile?.familyHistoryOtherCancerRelation ?? ""
-  );
-  const [sunburns, setSunburns] = useState(
-    initialProfile?.hadSevereSunburns ?? false
-  );
-  const [sunExposure, setSunExposure] = useState(
-    initialProfile?.frequentSunExposure ?? false
-  );
-  const [tanning, setTanning] = useState(
-    initialProfile?.usesTanningBeds ?? false
-  );
+  const [phototype, setPhototype] = useState<SkinPhototype | null>(initialProfile?.skinPhototype ?? null);
+  const [familySkin, setFamilySkin] = useState(initialProfile?.familyHistorySkinCancer ?? false);
+  const [familySkinWho, setFamilySkinWho] = useState(initialProfile?.familyHistoryRelation ?? "");
+  const [familyOther, setFamilyOther] = useState(initialProfile?.familyHistoryOtherCancer ?? false);
+  const [familyOtherWho, setFamilyOtherWho] = useState(initialProfile?.familyHistoryOtherCancerRelation ?? "");
+  const [sunburns, setSunburns] = useState(initialProfile?.hadSevereSunburns ?? false);
+  const [sunExposure, setSunExposure] = useState(initialProfile?.frequentSunExposure ?? false);
+  const [tanning, setTanning] = useState(initialProfile?.usesTanningBeds ?? false);
   const [manyMoles, setManyMoles] = useState(initialProfile?.manyMoles ?? false);
-  const [atypicalMoles, setAtypicalMoles] = useState(
-    initialProfile?.atypicalMoles ?? false
-  );
+  const [atypicalMoles, setAtypicalMoles] = useState(initialProfile?.atypicalMoles ?? false);
   const [fairSkin, setFairSkin] = useState(initialProfile?.veryFairSkin ?? false);
 
   async function handleFinish() {
@@ -389,38 +618,27 @@ export default function ProfileWizard({ mode, initialProfile, onComplete }: Prop
     onComplete();
   }
 
-  const stepTitles = [
-    "Basic info",
-    "Family history",
-    "Lifestyle",
-    "Skin appearance",
-  ];
+  const stepTitles = ["Basic info", "Family history", "Lifestyle", "Skin appearance"];
 
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
-        {mode === "edit" && step === 1 ? null : (
-          step > 1 ? (
-            <Pressable onPress={() => setStep((s) => s - 1)} style={styles.back}>
-              <Ionicons name="chevron-back" size={20} color={colors.text} />
-            </Pressable>
-          ) : <View style={styles.back} />
+        {step > 1 ? (
+          <Pressable onPress={() => setStep((s) => s - 1)} style={styles.back}>
+            <Ionicons name="chevron-back" size={20} color={colors.text} />
+          </Pressable>
+        ) : (
+          <View style={styles.back} />
         )}
         <View style={styles.headerMeta}>
-          <Text style={styles.stepLabel}>
-            Step {step} of {TOTAL_STEPS}
-          </Text>
+          <Text style={styles.stepLabel}>Step {step} of {TOTAL_STEPS}</Text>
           <Text style={styles.stepTitle}>{stepTitles[step - 1]}</Text>
         </View>
       </View>
 
       <ProgressBar step={step} />
 
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {step === 1 && (
           <View style={styles.fields}>
             <Text style={styles.fieldLabel}>Your age</Text>
@@ -434,24 +652,15 @@ export default function ProfileWizard({ mode, initialProfile, onComplete }: Prop
               maxLength={3}
             />
 
-            <Text style={[styles.fieldLabel, { marginTop: 20 }]}>
-              Skin phototype (Fitzpatrick scale)
-            </Text>
-            <Text style={styles.fieldHint}>
-              How does your skin react to sun exposure?
-            </Text>
+            <Text style={[styles.fieldLabel, { marginTop: 20 }]}>Skin phototype (Fitzpatrick scale)</Text>
+            <Text style={styles.fieldHint}>How does your skin react to sun exposure?</Text>
             {PHOTOTYPES.map((pt) => (
               <Pressable
                 key={pt.value}
-                style={[
-                  styles.phototypeRow,
-                  phototype === pt.value && styles.phototypeRowActive,
-                ]}
+                style={[styles.phototypeRow, phototype === pt.value && styles.phototypeRowActive]}
                 onPress={() => setPhototype(pt.value)}
               >
-                <View
-                  style={[styles.phototypeColor, { backgroundColor: pt.color }]}
-                />
+                <View style={[styles.phototypeColor, { backgroundColor: pt.color }]} />
                 <View style={styles.phototypeText}>
                   <Text style={styles.phototypeLabel}>{pt.label}</Text>
                   <Text style={styles.phototypeDesc}>{pt.description}</Text>
@@ -466,16 +675,10 @@ export default function ProfileWizard({ mode, initialProfile, onComplete }: Prop
 
         {step === 2 && (
           <View style={styles.fields}>
-            <Toggle
-              label="Family history of skin cancer"
-              value={familySkin}
-              onChange={setFamilySkin}
-            />
+            <Toggle label="Family history of skin cancer" value={familySkin} onChange={setFamilySkin} />
             {familySkin && (
               <>
-                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>
-                  Who? (optional)
-                </Text>
+                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Who? (optional)</Text>
                 <TextInput
                   style={styles.input}
                   value={familySkinWho}
@@ -485,19 +688,11 @@ export default function ProfileWizard({ mode, initialProfile, onComplete }: Prop
                 />
               </>
             )}
-
             <View style={{ height: 16 }} />
-
-            <Toggle
-              label="Family history of other cancers"
-              value={familyOther}
-              onChange={setFamilyOther}
-            />
+            <Toggle label="Family history of other cancers" value={familyOther} onChange={setFamilyOther} />
             {familyOther && (
               <>
-                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>
-                  Who? (optional)
-                </Text>
+                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Who? (optional)</Text>
                 <TextInput
                   style={styles.input}
                   value={familyOtherWho}
@@ -512,45 +707,21 @@ export default function ProfileWizard({ mode, initialProfile, onComplete }: Prop
 
         {step === 3 && (
           <View style={styles.fields}>
-            <Toggle
-              label="Severe sunburns in the past"
-              value={sunburns}
-              onChange={setSunburns}
-            />
+            <Toggle label="Severe sunburns in the past" value={sunburns} onChange={setSunburns} />
             <View style={{ height: 12 }} />
-            <Toggle
-              label="Frequent sun exposure"
-              value={sunExposure}
-              onChange={setSunExposure}
-            />
+            <Toggle label="Frequent sun exposure" value={sunExposure} onChange={setSunExposure} />
             <View style={{ height: 12 }} />
-            <Toggle
-              label="Tanning bed use"
-              value={tanning}
-              onChange={setTanning}
-            />
+            <Toggle label="Tanning bed use" value={tanning} onChange={setTanning} />
           </View>
         )}
 
         {step === 4 && (
           <View style={styles.fields}>
-            <Toggle
-              label="Many moles (more than 50)"
-              value={manyMoles}
-              onChange={setManyMoles}
-            />
+            <Toggle label="Many moles (more than 50)" value={manyMoles} onChange={setManyMoles} />
             <View style={{ height: 12 }} />
-            <Toggle
-              label="Atypical moles (irregular or large)"
-              value={atypicalMoles}
-              onChange={setAtypicalMoles}
-            />
+            <Toggle label="Atypical moles (irregular or large)" value={atypicalMoles} onChange={setAtypicalMoles} />
             <View style={{ height: 12 }} />
-            <Toggle
-              label="Very fair skin"
-              value={fairSkin}
-              onChange={setFairSkin}
-            />
+            <Toggle label="Very fair skin" value={fairSkin} onChange={setFairSkin} />
           </View>
         )}
       </ScrollView>
@@ -584,28 +755,14 @@ const styles = StyleSheet.create({
   headerMeta: { flex: 1 },
   stepLabel: { color: colors.muted, fontSize: 12, fontWeight: "600", letterSpacing: 0.4 },
   stepTitle: { color: colors.text, fontSize: 22, fontWeight: "800", letterSpacing: -0.5, marginTop: 2 },
-
-  progressContainer: {
-    flexDirection: "row",
-    gap: 4,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
-  progressSegment: {
-    flex: 1,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.border,
-  },
+  progressContainer: { flexDirection: "row", gap: 4, paddingHorizontal: 20, paddingBottom: 20 },
+  progressSegment: { flex: 1, height: 4, borderRadius: 2, backgroundColor: colors.border },
   progressSegmentDone: { backgroundColor: colors.primary },
-
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 24 },
-
   fields: { gap: 4 },
   fieldLabel: { color: colors.text, fontSize: 14, fontWeight: "600", marginBottom: 8 },
   fieldHint: { color: colors.subtext, fontSize: 13, marginBottom: 10, marginTop: -4 },
-
   input: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -615,7 +772,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
   },
-
   phototypeRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -627,15 +783,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     marginBottom: 6,
   },
-  phototypeRowActive: {
-    borderColor: colors.primaryBorder,
-    backgroundColor: colors.primaryBg,
-  },
+  phototypeRowActive: { borderColor: colors.primaryBorder, backgroundColor: colors.primaryBg },
   phototypeColor: { width: 28, height: 28, borderRadius: 8, flexShrink: 0 },
   phototypeText: { flex: 1 },
   phototypeLabel: { color: colors.text, fontSize: 14, fontWeight: "600" },
   phototypeDesc: { color: colors.subtext, fontSize: 12, marginTop: 2 },
-
   toggle: {
     flexDirection: "row",
     alignItems: "center",
@@ -646,10 +798,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     gap: 12,
   },
-  toggleActive: {
-    borderColor: colors.primaryBorder,
-    backgroundColor: colors.primaryBg,
-  },
+  toggleActive: { borderColor: colors.primaryBorder, backgroundColor: colors.primaryBg },
   toggleLabel: { flex: 1, color: colors.text, fontSize: 14, fontWeight: "600" },
   toggleLabelActive: { color: colors.primary },
   toggleBox: {
@@ -664,7 +813,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   toggleBoxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-
   footer: { padding: 20, paddingBottom: 8 },
 });
 ```
@@ -678,12 +826,13 @@ git commit -m "feat: add ProfileWizard 4-step component"
 
 ---
 
-## Task 5: Onboarding screen
+## Task F5: Onboarding + EditProfile screens
 
 **Files:**
 - Create: `melanoma-detection-app/app/onboarding.tsx`
+- Create: `melanoma-detection-app/app/edit-profile.tsx`
 
-- [ ] **Step 1: Create onboarding screen**
+- [ ] **Step 1: Create onboarding.tsx**
 
 ```typescript
 // melanoma-detection-app/app/onboarding.tsx
@@ -701,258 +850,68 @@ export default function Onboarding() {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Create edit-profile.tsx**
 
-```bash
-git add melanoma-detection-app/app/onboarding.tsx
-git commit -m "feat: add onboarding screen"
-```
+```typescript
+// melanoma-detection-app/app/edit-profile.tsx
+import { router } from "expo-router";
+import { useEffect, useState } from "react";
+import ProfileWizard from "@/components/ProfileWizard";
+import { getUserProfile } from "@/db/user-profile.repository";
+import { UserProfile } from "@/types/user-profile";
 
-- [ ] **Step 3: Manual smoke test**
+export default function EditProfile() {
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
-  1. Clear app data / reinstall
-  2. Launch app → should land on disclaimer
-  3. Accept disclaimer → should redirect to onboarding (step 1 of 4)
-  4. Navigate all 4 steps → tap "Enter app" → should land on main tabs
-  5. Restart app → should NOT show onboarding again
+  useEffect(() => {
+    getUserProfile().then((p) => {
+      setProfile(p);
+      setLoaded(true);
+    });
+  }, []);
 
----
+  if (!loaded) return null;
 
-## Task 6: Python API — risk scoring (TDD)
-
-**Files:**
-- Create: `melanoma-detection-ai/api/test_risk_scoring.py`
-- Modify: `melanoma-detection-ai/api/main.py`
-
-- [ ] **Step 1: Extract compute_clinical_risk to main.py**
-
-Add below the FastAPI imports in `main.py`, before the model loading:
-
-```python
-from pydantic import BaseModel
-
-class RiskProfile(BaseModel):
-    age: int | None = None
-    skin_phototype: str | None = None
-    family_history_skin_cancer: bool = False
-    family_history_other_cancer: bool = False
-    had_severe_sunburns: bool = False
-    frequent_sun_exposure: bool = False
-    uses_tanning_beds: bool = False
-    many_moles: bool = False
-    atypical_moles: bool = False
-    very_fair_skin: bool = False
-
-
-RISK_WEIGHTS = {
-    "family_history_skin_cancer": 3,
-    "atypical_moles": 3,
-    "family_history_other_cancer": 2,
-    "many_moles": 2,
-    "had_severe_sunburns": 1,
-    "uses_tanning_beds": 1,
-    "frequent_sun_exposure": 1,
-    "very_fair_skin": 1,
+  return (
+    <ProfileWizard
+      mode="edit"
+      initialProfile={profile}
+      onComplete={() => router.back()}
+    />
+  );
 }
-
-PHOTOTYPE_LOW_RISK = {"I", "II"}
-
-
-def compute_clinical_risk(profile: RiskProfile) -> tuple[str, float]:
-    """Returns (clinical_risk_level, threshold)."""
-    score = 0
-
-    for field, weight in RISK_WEIGHTS.items():
-        if getattr(profile, field, False):
-            score += weight
-
-    if profile.skin_phototype in PHOTOTYPE_LOW_RISK:
-        score += 2
-
-    if profile.age is not None and profile.age > 50:
-        score += 1
-
-    if score <= 2:
-        return "low", 0.50
-    elif score <= 5:
-        return "medium", 0.42
-    else:
-        return "high", 0.35
 ```
-
-- [ ] **Step 2: Write failing tests**
-
-```python
-# melanoma-detection-ai/api/test_risk_scoring.py
-import pytest
-from main import RiskProfile, compute_clinical_risk
-
-
-def test_no_risk_factors_returns_low():
-    profile = RiskProfile()
-    level, threshold = compute_clinical_risk(profile)
-    assert level == "low"
-    assert threshold == 0.50
-
-
-def test_family_history_skin_cancer_alone_is_medium():
-    profile = RiskProfile(family_history_skin_cancer=True)
-    level, threshold = compute_clinical_risk(profile)
-    assert level == "medium"
-    assert threshold == 0.42
-
-
-def test_family_history_and_atypical_moles_is_high():
-    profile = RiskProfile(family_history_skin_cancer=True, atypical_moles=True)
-    level, threshold = compute_clinical_risk(profile)
-    assert level == "high"
-    assert threshold == 0.35
-
-
-def test_phototype_I_adds_score():
-    profile = RiskProfile(skin_phototype="I")
-    level, _ = compute_clinical_risk(profile)
-    assert level == "medium"
-
-
-def test_phototype_III_no_extra_score():
-    profile = RiskProfile(skin_phototype="III")
-    level, threshold = compute_clinical_risk(profile)
-    assert level == "low"
-    assert threshold == 0.50
-
-
-def test_age_over_50_adds_score():
-    profile = RiskProfile(age=55, family_history_other_cancer=True)
-    level, _ = compute_clinical_risk(profile)
-    assert level == "medium"
-
-
-def test_all_factors_high():
-    profile = RiskProfile(
-        family_history_skin_cancer=True,
-        atypical_moles=True,
-        many_moles=True,
-        skin_phototype="I",
-        age=60,
-    )
-    level, threshold = compute_clinical_risk(profile)
-    assert level == "high"
-    assert threshold == 0.35
-```
-
-- [ ] **Step 3: Run tests — expect FAIL (function not yet in place)**
-
-```bash
-cd melanoma-detection-ai && .venv/bin/pytest api/test_risk_scoring.py -v
-```
-
-Expected: ImportError or NameError (compute_clinical_risk not defined yet — that's fine, it confirms test isolation).
-
-- [ ] **Step 4: Add compute_clinical_risk to main.py (from Step 1 above) and run tests**
-
-```bash
-.venv/bin/pytest api/test_risk_scoring.py -v
-```
-
-Expected: all 7 tests PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add melanoma-detection-ai/api/main.py melanoma-detection-ai/api/test_risk_scoring.py
-git commit -m "feat: add RiskProfile model and compute_clinical_risk with tests"
-```
-
----
-
-## Task 7: Python API — extend /predict endpoint
-
-**Files:**
-- Modify: `melanoma-detection-ai/api/main.py`
-
-- [ ] **Step 1: Update /predict to accept optional risk_profile**
-
-Replace the existing `@app.post("/predict")` function with:
-
-```python
-import json
-
-@app.post("/predict")
-async def predict(
-    file: UploadFile = File(...),
-    risk_profile: str | None = Form(default=None),
-):
-    if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
-        raise HTTPException(status_code=400, detail="Wgraj obraz JPG/PNG/WEBP.")
-
-    data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Plik za duży (max 10 MB).")
-
-    try:
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Niepoprawny plik obrazu.")
-
-    x = tf(img).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        logit = model(x).squeeze(1)
-        prob = torch.sigmoid(logit).item()
-
-    clinical_risk_level: str | None = None
-    threshold = THRESHOLD
-
-    if risk_profile:
-        try:
-            profile_data = json.loads(risk_profile)
-            profile = RiskProfile(**profile_data)
-            clinical_risk_level, threshold = compute_clinical_risk(profile)
-        except Exception:
-            pass  # malformed profile → fall back to default threshold
-
-    label: Literal["low_risk", "high_risk"] = "high_risk" if prob >= threshold else "low_risk"
-
-    return {
-        "probability": prob,
-        "threshold": threshold,
-        "clinical_risk_level": clinical_risk_level,
-        "label": label,
-        "disclaimer": "This is not a medical diagnosis. Consult a dermatologist.",
-    }
-```
-
-Also add `Form` to the fastapi import line:
-```python
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
-```
-
-- [ ] **Step 2: Run existing tests still pass**
-
-```bash
-cd melanoma-detection-ai && .venv/bin/pytest api/test_risk_scoring.py -v
-```
-
-Expected: all 7 PASS.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add melanoma-detection-ai/api/main.py
-git commit -m "feat: extend /predict to accept and apply risk_profile"
+git add melanoma-detection-app/app/onboarding.tsx melanoma-detection-app/app/edit-profile.tsx
+git commit -m "feat: add onboarding and edit-profile screens"
 ```
+
+- [ ] **Step 4: Manual smoke test (requires B1+B2 not needed yet — just UI flow)**
+
+  1. Clear app data / reinstall
+  2. Launch → disclaimer → accept → onboarding step 1 appears
+  3. Navigate all 4 steps → "Enter app" → main tabs load
+  4. Restart → onboarding does NOT show
 
 ---
 
-## Task 8: Update TypeScript predict client
+# INTEGRATION
+
+*Requires B1+B2 and F1–F5 to be done.*
+
+---
+
+## Task F6: Update TypeScript predict client
 
 **Files:**
 - Modify: `melanoma-detection-app/lib/api/predict.ts`
+- Modify: `melanoma-detection-app/app/(tabs)/upload.tsx`
 
-- [ ] **Step 1: Update types and send risk_profile**
-
-Replace the file contents with:
+- [ ] **Step 1: Replace predict.ts**
 
 ```typescript
 // melanoma-detection-app/lib/api/predict.ts
@@ -1056,9 +1015,9 @@ export async function predict({ uri }: PredictInput): Promise<PredictResult> {
 }
 ```
 
-- [ ] **Step 2: Update upload.tsx to pass new result fields to result screen**
+- [ ] **Step 2: Update router.replace in upload.tsx**
 
-In `melanoma-detection-app/app/(tabs)/upload.tsx`, update the `router.replace` call inside `onAnalyze`:
+In `melanoma-detection-app/app/(tabs)/upload.tsx`, replace the `router.replace` call inside `onAnalyze`:
 
 ```typescript
 router.replace({
@@ -1076,12 +1035,12 @@ router.replace({
 
 ```bash
 git add melanoma-detection-app/lib/api/predict.ts melanoma-detection-app/app/(tabs)/upload.tsx
-git commit -m "feat: send risk_profile to API and surface clinical_risk_level in result"
+git commit -m "feat: send risk_profile to API, surface clinical_risk_level in result"
 ```
 
 ---
 
-## Task 9: Update result screen
+## Task F7: Update result screen
 
 **Files:**
 - Modify: `melanoma-detection-app/app/result.tsx`
@@ -1141,11 +1100,7 @@ export default function Result() {
         )}
 
         <Text style={styles.disclaimer}>Not a medical diagnosis.</Text>
-        <Button
-          title="Go Home"
-          onPress={() => router.replace("/")}
-          style={{ marginTop: 24 }}
-        />
+        <Button title="Go Home" onPress={() => router.replace("/")} style={{ marginTop: 24 }} />
       </View>
     </Screen>
   );
@@ -1183,61 +1138,12 @@ git commit -m "feat: show clinical_risk_level badge and threshold info on result
 
 ---
 
-## Task 10: Update profile tab
+## Task F8: Update profile tab
 
 **Files:**
 - Modify: `melanoma-detection-app/app/(tabs)/profile.tsx`
 
-- [ ] **Step 1: Update profile.tsx to show risk profile section and Edit button**
-
-Add to the existing `profile.tsx`. The key additions are: fetch profile on focus, render risk badge, list active risk factors, add "Edit profile" menu item that navigates to `/onboarding` in edit mode.
-
-First, add the edit route to `_layout.tsx` Stack (it reuses the onboarding screen with edit mode — we need a separate route):
-
-Create `melanoma-detection-app/app/edit-profile.tsx`:
-
-```typescript
-// melanoma-detection-app/app/edit-profile.tsx
-import { router } from "expo-router";
-import { useEffect, useState } from "react";
-import ProfileWizard from "@/components/ProfileWizard";
-import { getUserProfile } from "@/db/user-profile.repository";
-import { UserProfile } from "@/types/user-profile";
-
-export default function EditProfile() {
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    getUserProfile().then((p) => {
-      setProfile(p);
-      setLoaded(true);
-    });
-  }, []);
-
-  if (!loaded) return null;
-
-  return (
-    <ProfileWizard
-      mode="edit"
-      initialProfile={profile}
-      onComplete={() => router.back()}
-    />
-  );
-}
-```
-
-- [ ] **Step 2: Register edit-profile route in _layout.tsx**
-
-Add inside the `<Stack>` in `_layout.tsx`:
-
-```typescript
-<Stack.Screen name="edit-profile" />
-```
-
-- [ ] **Step 3: Update profile.tsx**
-
-Replace the file with:
+- [ ] **Step 1: Replace profile.tsx**
 
 ```typescript
 // melanoma-detection-app/app/(tabs)/profile.tsx
@@ -1258,7 +1164,6 @@ type MenuItem = {
   label: string;
   sub: string;
   onPress: () => void;
-  danger?: boolean;
 };
 
 const RISK_COLORS: Record<ClinicalRiskLevel, { color: string; bg: string }> = {
@@ -1315,10 +1220,7 @@ export default function ProfileScreen() {
 
   const riskLevel = profile ? computeLocalRiskLevel(profile) : null;
   const riskStyle = riskLevel ? RISK_COLORS[riskLevel] : null;
-
-  const activeFactors = profile
-    ? RISK_FACTOR_LABELS.filter((f) => profile[f.key] === true)
-    : [];
+  const activeFactors = profile ? RISK_FACTOR_LABELS.filter((f) => profile[f.key] === true) : [];
 
   const menu: MenuItem[] = [
     {
@@ -1338,7 +1240,6 @@ export default function ProfileScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-
         <View style={styles.avatar}>
           <Ionicons name="person" size={28} color={colors.primary} />
         </View>
@@ -1365,7 +1266,6 @@ export default function ProfileScreen() {
                 {riskLevel.charAt(0).toUpperCase() + riskLevel.slice(1)} clinical risk
               </Text>
             </View>
-
             {activeFactors.length > 0 && (
               <View style={styles.factorsList}>
                 {activeFactors.map((f) => (
@@ -1376,11 +1276,8 @@ export default function ProfileScreen() {
                 ))}
               </View>
             )}
-
             {profile?.skinPhototype && (
-              <Text style={styles.phototypeNote}>
-                Skin phototype: Fitzpatrick {profile.skinPhototype}
-              </Text>
+              <Text style={styles.phototypeNote}>Skin phototype: Fitzpatrick {profile.skinPhototype}</Text>
             )}
           </View>
         )}
@@ -1389,10 +1286,7 @@ export default function ProfileScreen() {
           {menu.map((item, i) => (
             <Pressable
               key={item.label}
-              style={[
-                styles.menuItem,
-                i < menu.length - 1 && styles.menuItemBorder,
-              ]}
+              style={[styles.menuItem, i < menu.length - 1 && styles.menuItemBorder]}
               onPress={item.onPress}
             >
               <View style={styles.menuIcon}>
@@ -1443,7 +1337,6 @@ const styles = StyleSheet.create({
   statValue: { color: colors.text, fontSize: 32, fontWeight: "800", letterSpacing: -1, marginBottom: 4 },
   statLabel: { color: colors.muted, fontSize: 12, fontWeight: "600", letterSpacing: 0.3 },
   statDivider: { width: 1, height: 40, backgroundColor: colors.border },
-
   sectionTitle: { color: colors.text, fontSize: 16, fontWeight: "700", marginBottom: 10 },
   riskSection: {
     backgroundColor: colors.card,
@@ -1466,7 +1359,6 @@ const styles = StyleSheet.create({
   factorRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   factorLabel: { color: colors.subtext, fontSize: 13 },
   phototypeNote: { color: colors.muted, fontSize: 12 },
-
   menu: {
     backgroundColor: colors.card,
     borderRadius: 18,
@@ -1492,24 +1384,19 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 2: Commit**
 
 ```bash
-git add melanoma-detection-app/app/(tabs)/profile.tsx melanoma-detection-app/app/edit-profile.tsx melanoma-detection-app/app/_layout.tsx
-git commit -m "feat: show risk profile section in profile tab, add edit-profile route"
+git add melanoma-detection-app/app/(tabs)/profile.tsx
+git commit -m "feat: show risk profile section in profile tab"
 ```
 
 ---
 
-## Task 11: End-to-end manual test
+## Task I1: End-to-end manual test
 
 - [ ] **Step 1: Start API server**
 
-```bash
-cd melanoma-detection-ai && docker-compose up
-```
-
-Or directly:
 ```bash
 cd melanoma-detection-ai && .venv/bin/uvicorn api.main:app --reload --port 8000
 ```
@@ -1522,30 +1409,30 @@ cd melanoma-detection-app && pnpm start
 
 - [ ] **Step 3: Test onboarding flow**
 
-1. Fresh install → disclaimer → onboarding wizard appears
-2. Fill all 4 steps (set age=60, phototype=I, family_history_skin_cancer=true, atypical_moles=true)
-3. Tap "Enter app" → main tabs load
-4. Restart → onboarding does NOT show again
+  1. Fresh install → disclaimer → accept → onboarding step 1 appears
+  2. Fill: age=60, phototype=I, family_history_skin_cancer=true, atypical_moles=true
+  3. Tap "Enter app" → main tabs load
+  4. Restart → onboarding does NOT show again
 
 - [ ] **Step 4: Test analysis with risk profile**
 
-1. Upload tab → pick image → Analyze
-2. Result screen shows clinical_risk_level badge (should be "High" for the profile above)
-3. Threshold note visible: "Detection threshold adjusted to 35%..."
+  1. Upload tab → pick image → Analyze
+  2. Result shows "High clinical risk" badge
+  3. Threshold note: "Detection threshold adjusted to 35%..."
 
 - [ ] **Step 5: Test profile editing**
 
-1. Profile tab → risk profile section visible with badge + factor list
-2. Tap "Edit profile" → wizard opens pre-filled
-3. Change a value → Save → profile tab updates
+  1. Profile tab → risk profile section visible with badge + factor list
+  2. "Edit profile" → wizard opens pre-filled
+  3. Change value → Save → profile tab updates
 
-- [ ] **Step 6: Test API fallback**
+- [ ] **Step 6: Test API fallback (no profile)**
 
-1. Temporarily comment out profile fetch in predict.ts (pass no risk_profile)
-2. Analyze → result shows no badge, no threshold note
-3. Restore
+  1. Temporarily skip `form.append("risk_profile", ...)` in predict.ts
+  2. Analyze → no badge, no threshold note, threshold=0.5
+  3. Restore
 
-- [ ] **Step 7: Commit if any fixes needed, then tag**
+- [ ] **Step 7: Tag**
 
 ```bash
 git tag v0.2.0-risk-profile
